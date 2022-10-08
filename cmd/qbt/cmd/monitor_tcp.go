@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"github.com/spf13/cobra"
 	"net"
-	"strings"
 	"time"
 )
 
@@ -37,11 +36,6 @@ var monitorTCPCmd = &cobra.Command{
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("need ip:port")
-		}
-		ipMsg := args[0]
-		sp := strings.Split(ipMsg, ":")
-		if len(sp) != 2 && len(sp) != 3 {
-			return fmt.Errorf("param format error, should ip:port")
 		}
 		return nil
 	},
@@ -79,7 +73,7 @@ func connectTCP(cc *ConnConfig) error {
 		fmt.Println("connect address error", err)
 		return err
 	}
-	duration := time.Since(start)
+	duration := time.Since(start) // tcp 链接的时间间隔
 	fmt.Println("tcp connect spend:", duration.String())
 	defer func() {
 		err = conn.Close()
