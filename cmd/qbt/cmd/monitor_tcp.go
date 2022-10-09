@@ -22,11 +22,20 @@ THE SOFTWARE.
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/spf13/cobra"
 	"net"
 	"time"
 )
+
+func Marshal(c any) string {
+	v, err := json.Marshal(c)
+	if err != nil {
+		return ""
+	}
+	return string(v)
+}
 
 // monitorTCPCmd get tcp conn
 var monitorTCPCmd = &cobra.Command{
@@ -45,14 +54,16 @@ var monitorTCPCmd = &cobra.Command{
 		cc.Interval, _ = cmd.Flags().GetInt("interval")
 		cc.Count, _ = cmd.Flags().GetInt("count")
 		cc.Address = args[0]
+		fmt.Println("init args", Marshal(cc))
 		for cc.Count > 0 {
 			err := connectTCP(cc)
-			if err == nil {
-				return
+			if err != nil {
+				fmt.Println(err)
 			}
-			fmt.Println(cc)
+			//fmt.Println(cc)
 			time.Sleep(time.Duration(cc.Interval) * time.Second)
 			cc.Count -= 1
+			//fmt.Println(cc.Count)
 		}
 		return
 	},
