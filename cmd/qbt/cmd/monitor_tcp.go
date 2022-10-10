@@ -85,7 +85,7 @@ func connectTCP(cc *ConnConfig) error {
 		return err
 	}
 	duration := time.Since(start) // tcp 链接的时间间隔
-	fmt.Println("tcp connect spend:", duration.String())
+	fmt.Println(time.Now().Format(time.RFC3339), "tcp connect spend:", duration.String())
 	defer func() {
 		err = conn.Close()
 		if err != nil {
