@@ -85,6 +85,8 @@ var monitorTCPCmd = &cobra.Command{
 				time.Sleep(time.Duration(cc.Interval) * time.Second)
 			}
 		}
+		mergeStaticMsg(summary, stage)
+		fmt.Printf("summary information: [%s]\n", summary.String())
 	},
 }
 
