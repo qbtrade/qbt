@@ -135,7 +135,7 @@ func connectTCP(address string, timeout time.Duration, cnt int) (int64, error) {
 	}
 	duration := time.Since(start) // tcp 连接的时间间隔
 	d := duration.Milliseconds()
-	fmt.Println(cnt, "tcp connect cost:", fmt.Sprintf("%dms", d))
+	fmt.Println(cnt, time.Now().Format(time.RFC3339), "tcp connect cost:", fmt.Sprintf("%dms", d))
 	defer func() {
 		err = conn.Close()
 		if err != nil {
