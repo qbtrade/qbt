@@ -91,7 +91,7 @@ var monitorTCPCmd = &cobra.Command{
 					stage.MaxCost = cf.Max(stage.MaxCost, d)
 					stage.MinCost = cf.Min(stage.MinCost, d)
 				}
-				statsdTags = append(statsdTags, fmt.Sprintf("error:%v", err != err))
+				statsdTags = append(statsdTags, fmt.Sprintf("error:%v", err != nil))
 				statsdClient.Histogram("qbt/tcp-monitor", float64(d), statsdTags, 1)
 				if cnt%100 == 0 {
 					fmt.Printf("stage information: [%s]\n", stage.String())
