@@ -24,11 +24,14 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/qbtrade/qbt/cmd/qbt/cf"
-	"github.com/spf13/cobra"
 	"math"
 	"net"
+	"os"
 	"time"
+
+	"github.com/DataDog/datadog-go/v5/statsd"
+	"github.com/qbtrade/qbt/cmd/qbt/cf"
+	"github.com/spf13/cobra"
 )
 
 func Marshal(c any) string {
@@ -57,16 +60,28 @@ var monitorTCPCmd = &cobra.Command{
 		cc.Interval, _ = cmd.Flags().GetInt("interval")
 		cc.Count, _ = cmd.Flags().GetInt("count")
 		cc.Addresses, _ = cmd.Flags().GetStringSlice("addresses")
+		cc.StatsdServer, _ = cmd.Flags().GetString("statsd")
 		if len(args) > 0 { // 支持放在其他参数中 e.g.  qbt monitor-tcp -i 10 -c 10 -a 1.2.3.4:80,2.3.4.5:22 3.4.5.6:8000 4.5.6.7:8001
 			cc.Addresses = append(cc.Addresses, args...)
 		}
 		fmt.Println("init args", Marshal(cc))
+		statsdClient, err := statsd.New(cc.StatsdServer)
+		if err != nil {
+			fmt.Printf("new statsd client to %s error: %v", cc.StatsdServer, err)
+		}
+		hostname, err := os.Hostname()
+		if err != nil {
+			fmt.Println("Error getting hostname:", err)
+			return
+		}
+		fmt.Println("Hostname:", hostname)
 		cnt := 0
 		summary := newStaticsMsg()
 		stage := newStaticsMsg()
 		for cc.Count > cnt {
 			for _, address := range cc.Addresses {
 				cnt += 1
+				statsdTags := []string{fmt.Sprintf("host:%s", hostname), fmt.Sprintf("address:%s", address)}
 				d, err := connectTCP(address, time.Duration(cc.Timeout), cnt)
 				if err != nil {
 					stage.FailLength += 1
@@ -76,6 +91,8 @@ var monitorTCPCmd = &cobra.Command{
 					stage.MaxCost = cf.Max(stage.MaxCost, d)
 					stage.MinCost = cf.Min(stage.MinCost, d)
 				}
+				statsdTags = append(statsdTags, fmt.Sprintf("error:%v", err != err))
+				statsdClient.Histogram("qbt/tcp-monitor", float64(d), statsdTags, 1)
 				if cnt%100 == 0 {
 					fmt.Printf("stage information: [%s]\n", stage.String())
 					mergeStaticMsg(summary, stage)
@@ -121,10 +138,11 @@ func (s *StaticsMsg) String() string {
 }
 
 type ConnConfig struct {
-	Timeout   int      // 超时
-	Interval  int      // 连接间隔
-	Count     int      // 最大连接次数
-	Addresses []string // 要连接的地址
+	Timeout      int      // 超时
+	Interval     int      // 连接间隔
+	Count        int      // 最大连接次数
+	Addresses    []string // 要连接的地址
+	StatsdServer string   //发送统计的statsd
 }
 
 //connectTCP 建立TCP连接
@@ -166,4 +184,5 @@ func init() {
 	monitorTCPCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
 	//monitorTCPCmd.Flags().IntP("loop", "l", math.MaxInt, "max count for loop")
 	monitorTCPCmd.Flags().StringSliceP("addresses", "a", []string{}, "want to connect addresses slice such as a,b,c")
+	monitorTCPCmd.Flags().String("statsd", "10.11.1.33:8125", "send rtt to statsd")
 }
