@@ -134,7 +134,7 @@ func mergeStaticMsg(s1 *StaticsMsg, s2 *StaticsMsg) {
 
 func (s *StaticsMsg) String() string {
 	s.MeanCost = cf.Mean(s.SuccessCost)
-	return fmt.Sprintf("susscess:%d, fail:%d, max cost:%d, min cost:%d, mean cost:%d", s.SuccessLength, s.FailLength, s.MaxCost, s.MinCost, s.MeanCost)
+	return fmt.Sprintf("susscess:%d, fail:%d, max cost:%.2f, min cost:%.2f, mean cost:%.2f", s.SuccessLength, s.FailLength, s.MaxCost, s.MinCost, s.MeanCost)
 }
 
 type ConnConfig struct {
