@@ -99,8 +99,8 @@ var monitorTCPCmd = &cobra.Command{
 					fmt.Printf("summary information: [%s]\n", summary.String())
 					stage = newStaticsMsg()
 				}
-				time.Sleep(time.Duration(cc.Interval) * time.Second)
 			}
+			time.Sleep(time.Duration(cc.Interval) * time.Second)
 		}
 		mergeStaticMsg(summary, stage)
 		fmt.Printf("summary information: [%s]\n", summary.String())
@@ -109,18 +109,18 @@ var monitorTCPCmd = &cobra.Command{
 
 func newStaticsMsg() *StaticsMsg {
 	return &StaticsMsg{
-		SuccessCost: make([]int64, 0, 0),
+		SuccessCost: make([]float64, 0, 0),
 		MinCost:     math.MaxInt64,
 	}
 }
 
 type StaticsMsg struct {
-	SuccessCost   []int64 // 成功耗时
-	SuccessLength int     // 成功的次数
-	FailLength    int     // 失败的次数
-	MaxCost       int64   // 成功最大耗时
-	MinCost       int64   // 成功最少耗时
-	MeanCost      int64   // 成功平均耗时
+	SuccessCost   []float64 // 成功耗时
+	SuccessLength int       // 成功的次数
+	FailLength    int       // 失败的次数
+	MaxCost       float64   // 成功最大耗时
+	MinCost       float64   // 成功最少耗时
+	MeanCost      float64   // 成功平均耗时
 }
 
 // mergeStaticMsg 将100个ping信息合并到总的里
@@ -146,7 +146,7 @@ type ConnConfig struct {
 }
 
 //connectTCP 建立TCP连接
-func connectTCP(address string, timeout time.Duration, cnt int) (int64, error) {
+func connectTCP(address string, timeout time.Duration, cnt int) (float64, error) {
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", address, timeout*time.Second)
 	if err != nil {
@@ -154,8 +154,8 @@ func connectTCP(address string, timeout time.Duration, cnt int) (int64, error) {
 		return 0, err
 	}
 	duration := time.Since(start) // tcp 连接的时间间隔
-	d := duration.Milliseconds()
-	fmt.Println(cnt, time.Now().Format(time.RFC3339), "tcp connect cost:", fmt.Sprintf("%dms", d))
+	d := float64(duration.Nanoseconds()) / 1e6
+	fmt.Println(cnt, time.Now().Format(time.RFC3339), "tcp connect cost:", fmt.Sprintf("%.2fms", d))
 	defer func() {
 		err = conn.Close()
 		if err != nil {
