@@ -5,7 +5,7 @@ qb tool
 # Installation
 
 ```
-go get  github.com/qbtrade/qbt@v0.1.1
+go install  github.com/qbtrade/qbt@v0.1.2
 ```
 
 
