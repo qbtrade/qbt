@@ -57,7 +57,7 @@ var monitorTCPCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cc := new(ConnConfig)
 		cc.Timeout, _ = cmd.Flags().GetInt("timeout")
-		cc.Interval, _ = cmd.Flags().GetInt("interval")
+		cc.Interval, _ = cmd.Flags().GetFloat64("interval")
 		cc.Count, _ = cmd.Flags().GetInt("count")
 		cc.Addresses, _ = cmd.Flags().GetStringSlice("addresses")
 		cc.StatsdServer, _ = cmd.Flags().GetString("statsd")
@@ -79,28 +79,30 @@ var monitorTCPCmd = &cobra.Command{
 		summary := newStaticsMsg()
 		stage := newStaticsMsg()
 		for cc.Count > cnt {
-			for _, address := range cc.Addresses {
-				cnt += 1
-				statsdTags := []string{fmt.Sprintf("host:%s", hostname), fmt.Sprintf("address:%s", address)}
-				d, err := connectTCP(address, time.Duration(cc.Timeout), cnt)
-				if err != nil {
-					stage.FailLength += 1
-				} else {
-					stage.SuccessLength += 1
-					stage.SuccessCost = append(stage.SuccessCost, d)
-					stage.MaxCost = cf.Max(stage.MaxCost, d)
-					stage.MinCost = cf.Min(stage.MinCost, d)
+			go func() {
+				for _, address := range cc.Addresses {
+					cnt += 1
+					statsdTags := []string{fmt.Sprintf("host:%s", hostname), fmt.Sprintf("address:%s", address)}
+					d, err := connectTCP(address, time.Duration(cc.Timeout), cnt)
+					if err != nil {
+						stage.FailLength += 1
+					} else {
+						stage.SuccessLength += 1
+						stage.SuccessCost = append(stage.SuccessCost, d)
+						stage.MaxCost = cf.Max(stage.MaxCost, d)
+						stage.MinCost = cf.Min(stage.MinCost, d)
+					}
+					statsdTags = append(statsdTags, fmt.Sprintf("error:%v", err != nil))
+					statsdClient.Histogram("qbt/tcp-monitor", float64(d), statsdTags, 1)
+					if cnt%100 == 0 {
+						fmt.Printf("stage information: [%s]\n", stage.String())
+						mergeStaticMsg(summary, stage)
+						fmt.Printf("summary information: [%s]\n", summary.String())
+						stage = newStaticsMsg()
+					}
 				}
-				statsdTags = append(statsdTags, fmt.Sprintf("error:%v", err != nil))
-				statsdClient.Histogram("qbt/tcp-monitor", float64(d), statsdTags, 1)
-				if cnt%100 == 0 {
-					fmt.Printf("stage information: [%s]\n", stage.String())
-					mergeStaticMsg(summary, stage)
-					fmt.Printf("summary information: [%s]\n", summary.String())
-					stage = newStaticsMsg()
-				}
-			}
-			time.Sleep(time.Duration(cc.Interval) * time.Second)
+			}()
+			time.Sleep(time.Duration(cc.Interval*1000) * time.Millisecond)
 		}
 		mergeStaticMsg(summary, stage)
 		fmt.Printf("summary information: [%s]\n", summary.String())
@@ -139,7 +141,7 @@ func (s *StaticsMsg) String() string {
 
 type ConnConfig struct {
 	Timeout      int      // 超时
-	Interval     int      // 连接间隔
+	Interval     float64  // 连接间隔 单位是秒
 	Count        int      // 最大连接次数
 	Addresses    []string // 要连接的地址
 	StatsdServer string   //发送统计的statsd
@@ -180,7 +182,7 @@ func init() {
 
 	// 添加局部命令行参数
 	monitorTCPCmd.Flags().IntP("timeout", "t", 5, "connect timeout")
-	monitorTCPCmd.Flags().IntP("interval", "i", 2, "connect interval")
+	monitorTCPCmd.Flags().Float64P("interval", "i", 2, "connect interval")
 	monitorTCPCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
 	//monitorTCPCmd.Flags().IntP("loop", "l", math.MaxInt, "max count for loop")
 	monitorTCPCmd.Flags().StringSliceP("addresses", "a", []string{}, "want to connect addresses slice such as a,b,c")
