@@ -17,29 +17,35 @@ import argparse
 import re
 import subprocess
 
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Update qbtrade/qbt version.")
     parser.add_argument("--dry-run", action="store_true", help="Run the script without executing any command.")
     return parser.parse_args()
 
+
 def read_file(file_path):
     with open(file_path, "r") as file:
         return file.read()
 
+
 def write_file(file_path, content):
     with open(file_path, "w") as file:
         file.write(content)
+
 
 def update_version(version_str):
     major, minor, patch = map(int, version_str.split("."))
     patch += 1
     return f"{major}.{minor}.{patch}"
 
+
 def exec_command(cmd, dry_run):
     if dry_run:
         print(f"Dry run: {cmd}")
     else:
         subprocess.run(cmd, shell=True, check=True)
+
 
 def main():
     args = parse_arguments()
@@ -62,7 +68,9 @@ def main():
     # Execute git commands
     exec_command(f'git commit -a -m "add to version {new_version}"', dry_run)
     exec_command(f'git tag v{new_version}', dry_run)
-    exec_command('git push', dry_run)
+    exec_command('git pull', dry_run)
+    exec_command('git push --tags', dry_run)
+
 
 if __name__ == "__main__":
     main()
