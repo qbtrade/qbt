@@ -70,6 +70,7 @@ def main():
     exec_command(f'git commit -a -m "add to version {new_version}"', dry_run)
     exec_command(f'git tag v{new_version}', dry_run)
     exec_command('git pull', dry_run)
+    exec_command('git push', dry_run)
     exec_command('git push --tags', dry_run)
 
 
