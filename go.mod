@@ -3,6 +3,7 @@ module github.com/qbtrade/qbt
 go 1.18
 
 require (
+	github.com/DataDog/datadog-go/v5 v5.3.0
 	github.com/sirupsen/logrus v1.9.0
 	github.com/spf13/cobra v1.5.0
 	github.com/spf13/viper v1.13.0
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	github.com/DataDog/datadog-go/v5 v5.3.0 // indirect
 	github.com/Microsoft/go-winio v0.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
