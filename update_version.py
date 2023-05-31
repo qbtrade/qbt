@@ -62,7 +62,8 @@ def main():
     # Update README.md
     readme_path = "README.md"
     readme_content = read_file(readme_path)
-    new_readme_content = re.sub(version_regex, fr'\g<1>{new_version}\g<3>', readme_content)
+    version_regex = r'(qbt@v)(\d+\.\d+\.\d+)'
+    new_readme_content = re.sub(version_regex, fr'\g<1>{new_version}', readme_content)
     write_file(readme_path, new_readme_content)
 
     # Execute git commands
