@@ -31,6 +31,8 @@ import (
 
 var cfgFile string
 
+const VERSION = "0.1.2"
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "qbt",
@@ -39,7 +41,7 @@ var rootCmd = &cobra.Command{
 For example:
 qbt monitor-tcp can help you check tcp latency between your machine and another server.
 
-Version: 0.1.2`,
+Version: ` + VERSION,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	// Run: func(cmd *cobra.Command, args []string) { },
