@@ -185,6 +185,6 @@ func init() {
 	monitorTCPCmd.Flags().Float64P("interval", "i", 2, "connect interval")
 	monitorTCPCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
 	//monitorTCPCmd.Flags().IntP("loop", "l", math.MaxInt, "max count for loop")
-	monitorTCPCmd.Flags().StringSliceP("addresses", "a", []string{}, "want to connect addresses slice such as a,b,c")
+	monitorTCPCmd.Flags().StringSliceP("addresses", "a", []string{"10.11.0.1:80"}, "want to connect addresses slice such as a,b,c")
 	monitorTCPCmd.Flags().String("statsd", "10.11.1.33:8125", "send rtt to statsd")
 }
