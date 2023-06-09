@@ -1,5 +1,7 @@
+package cmd
+
 /*
-Copyright © 2022 hinachen <hinachen@1token.trade>
+Copyright © 2022 1Token <service@1token.trade>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,7 +21,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
-package cmd
 
 import (
 	"encoding/json"
@@ -42,6 +43,8 @@ func Marshal(c any) string {
 	return string(v)
 }
 
+var cc = new(ConnConfig)
+
 // monitorTCPCmd get tcp conn
 var monitorTCPCmd = &cobra.Command{
 	Use:   "monitor-tcp",
@@ -55,7 +58,7 @@ var monitorTCPCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		cc := new(ConnConfig)
+		cc.OnlySummary, _ = cmd.Flags().GetBool("only-summary")
 		cc.Timeout, _ = cmd.Flags().GetInt("timeout")
 		cc.Interval, _ = cmd.Flags().GetFloat64("interval")
 		cc.Count, _ = cmd.Flags().GetInt("count")
@@ -93,7 +96,7 @@ var monitorTCPCmd = &cobra.Command{
 						stage.MinCost = cf.Min(stage.MinCost, d)
 					}
 					statsdTags = append(statsdTags, fmt.Sprintf("error:%v", err != nil))
-					statsdClient.Histogram("qbt/tcp-monitor", float64(d), statsdTags, 1)
+					_ = statsdClient.Histogram("qbt/tcp-monitor", d, statsdTags, 1)
 					if cnt%100 == 0 {
 						fmt.Printf("stage information: [%s]\n", stage.String())
 						mergeStaticMsg(summary, stage)
@@ -140,6 +143,9 @@ func (s *StaticsMsg) String() string {
 }
 
 type ConnConfig struct {
+	// display only summary info
+	OnlySummary bool
+
 	Timeout      int      // 超时
 	Interval     float64  // 连接间隔 单位是秒
 	Count        int      // 最大连接次数
@@ -157,7 +163,11 @@ func connectTCP(address string, timeout time.Duration, cnt int) (float64, error)
 	}
 	duration := time.Since(start) // tcp 连接的时间间隔
 	d := float64(duration.Nanoseconds()) / 1e6
-	fmt.Println(cnt, time.Now().Format(time.RFC3339), "tcp connect cost:", fmt.Sprintf("%.2fms", d))
+	if cc.OnlySummary {
+
+	} else {
+		fmt.Println(cnt, time.Now().Format(time.RFC3339), "tcp connect cost:", fmt.Sprintf("%.2fms", d))
+	}
 	defer func() {
 		err = conn.Close()
 		if err != nil {
@@ -181,6 +191,7 @@ func init() {
 	// serveCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 
 	// 添加局部命令行参数
+	monitorTCPCmd.Flags().BoolP("only-summary", "", false, "display only summary")
 	monitorTCPCmd.Flags().IntP("timeout", "t", 5, "connect timeout")
 	monitorTCPCmd.Flags().Float64P("interval", "i", 2, "connect interval")
 	monitorTCPCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
