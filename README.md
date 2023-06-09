@@ -1,6 +1,12 @@
 # qbt
+
 qb tool
 
+# Build
+
+```
+go build -o `go env GOPATH`/bin/qbt main.go
+```
 
 # Installation
 
