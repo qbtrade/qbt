@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/csv"
 	"fmt"
+	"github.com/spf13/cobra"
 	"math"
 	"net"
 	"os"
@@ -11,18 +12,63 @@ import (
 	"time"
 )
 
-type tcpPingQueue []int64
-
-func (q *tcpPingQueue) push(item int64) {
-	*q = append(*q, item)
+type tcpPingQueue struct {
+	limit int
+	items []time.Duration
+	sum   time.Duration
+	mean  time.Duration
+	max   time.Duration
 }
-func (q *tcpPingQueue) pop() (int64, bool) {
-	if len(*q) == 0 {
-		return 0, false
+
+func newTcpPingQueue(limit int) *tcpPingQueue {
+	return &tcpPingQueue{
+		limit: limit,
+		items: make([]time.Duration, 0, limit),
 	}
-	item := (*q)[0]
-	*q = (*q)[1:]
-	return item, true
+}
+
+func (q *tcpPingQueue) pushAndMaintain(item time.Duration) (first time.Duration, full bool) {
+	q.items = append(q.items, item)
+	q.sum += item
+	if len(q.items) > q.limit {
+		first = q.items[0]
+		q.items = q.items[1:]
+		q.sum -= first
+		full = true
+	}
+	q.mean = q.sum / time.Duration(len(q.items))
+	if item > q.max {
+		q.max = item
+	} else {
+		if first >= q.max {
+			q.max = 0
+			for _, value := range q.items {
+				if value > q.max {
+					q.max = value
+				}
+			}
+		}
+	}
+	return first, full
+}
+
+func (q *tcpPingQueue) StdDev() time.Duration {
+	variance := 0.0
+	for _, value := range q.items {
+		variance += math.Pow(float64(value-q.mean), 2)
+	}
+	variance /= float64(len(q.items))
+	//计算标准差
+	return time.Duration(math.Sqrt(variance))
+}
+
+func (q *tcpPingQueue) LossCount(timeout time.Duration) (lossCount int) {
+	for _, value := range q.items {
+		if value > timeout {
+			lossCount++
+		}
+	}
+	return lossCount
 }
 
 func compareRtt(a, b time.Duration) time.Duration {
@@ -33,7 +79,7 @@ func compareRtt(a, b time.Duration) time.Duration {
 	}
 }
 
-func CheckTcpPing(address, hostName string, interval float64) {
+func CheckTcpPing(address, hostName string, interval float64, timeout time.Duration, count int, displaySummaryOnly bool) {
 	//求ip和端口号
 	part := strings.Split(address, ":")
 	ip := part[0]
@@ -55,7 +101,7 @@ func CheckTcpPing(address, hostName string, interval float64) {
 			fmt.Println("create csv file error:", err)
 		}
 		writer = csv.NewWriter(file)
-		dataRow = []string{"welcome tcp-ping"}
+		dataRow = []string{"ts", "hostname", "ip", "port", "rtt", "loss"}
 		err := writer.Write(dataRow)
 		if err != nil {
 			fmt.Println("writer.Write error", err)
@@ -71,115 +117,67 @@ func CheckTcpPing(address, hostName string, interval float64) {
 	}
 
 	//cnt记录进行了多少次tcp-ping,lossCnt记录有多少次丢包
-	cnt, lossCnt, loss100, loss1000 := 0, 0, 0, 0
-	//记录总的rtt，最近100次的总rtt，最近1000次的总的rtt
-	sumRtt, sumRtt100, sumRtt1000 := time.Duration(0), time.Duration(0), time.Duration(0)
-	//记录总的最大rtt，最近100次的最大rtt，最近1000次的最大rtt
-	maxRtt, maxRtt100, maxRtt1000 := time.Duration(0), time.Duration(0), time.Duration(0)
+	cnt, lossCnt := 0, 0
+	sumRtt := time.Duration(0)
 	//使用队列来记录最近100和1000次的rtt
-	var rtts100, rtts1000 tcpPingQueue
+	var rtts100 = newTcpPingQueue(100)
+	var rtts1000 = newTcpPingQueue(1000)
 	//循环tcp-ping
 	for {
 		//每次尝试进行连接cnt都要+1
 		cnt++
-		//保证队列不越界
-		for len(rtts100) >= 100 {
-			item, ok := rtts100.pop()
-			if !ok {
-				fmt.Println("queue pop fail")
-				return
-			}
-			//保证连接失败数据统计正确
-			if item == 0 {
-				loss100--
-			} else {
-				sumRtt100 -= time.Duration(item * 1000000)
-			}
-		}
-		for len(rtts1000) >= 1000 {
-			item, ok := rtts1000.pop()
-			if !ok {
-				fmt.Println("queue pop fail")
-				return
-			}
-			//保证连接失败数据统计正确
-			if item == 0 {
-				loss1000--
-			} else {
-				sumRtt1000 -= time.Duration(item * 1000000)
-			}
-
+		if count > 0 && cnt > count {
+			break
 		}
 		//拨号，建立TCP连接
 		start := time.Now()
 		now := start.UnixMilli()
-		conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+		conn, err := net.DialTimeout("tcp", address, timeout*time.Second)
+		rtt := time.Duration(0)
 		if err != nil {
 			//判断是否是超时错误
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				lossCnt++
-				loss100++
-				loss1000++
 				dataRow = []string{strconv.FormatInt(now, 10), hostName, ip, port, "9999", "true"}
-				rtts1000.push(0)
-				rtts100.push(0)
+				rtt = timeout * time.Second
 			} else {
 				fmt.Println("连接失败")
 				break
 			}
 		} else {
 			//确定rtt并写入csv文件
-			rtt := time.Since(start)
-			dataRow = []string{strconv.FormatInt(now, 10), hostName, ip, port, rtt.String(), "false"}
-			//求总的rtt
-			sumRtt += rtt
-			sumRtt100 += rtt
-			sumRtt1000 += rtt
-			//求最大rtt
-			maxRtt = compareRtt(maxRtt, rtt)
-			//将当前rtt加入队列
-			rtts100.push(rtt.Milliseconds())
-			rtts1000.push(rtt.Milliseconds())
-
+			rtt = time.Since(start)
 		}
+		//将当前rtt加入队列
+		sumRtt += rtt
+		rtts100.pushAndMaintain(rtt)
+		rtts1000.pushAndMaintain(rtt)
+
+		rttMs := float64(rtt.Nanoseconds()) / 1e6
+		if !displaySummaryOnly {
+			fmt.Printf("\rtcp-ping (%s:%s) seq=%d rtt=%.2fms       ", ip, port, cnt, rttMs)
+		}
+		dataRow = []string{strconv.FormatInt(now, 10), hostName, ip, port, fmt.Sprintf("%.2f", rttMs), "false"}
+
 		//每进行100次tcp-ping进行一次统计
 		if cnt%100 == 0 {
 			//计算总的平均值
-			meanRtt := sumRtt.Milliseconds() / int64(cnt)
-			fmt.Println("当前总共进行了", cnt, "次tcp-ping其中：")
-			fmt.Println("有", lossCnt, "次连接失败", "平均值为", meanRtt, "ms", "最大rtt为", maxRtt)
+			meanRtt := sumRtt.Nanoseconds() / int64(cnt)
+			fmt.Println("\n当前总共进行了", cnt, "次tcp-ping其中：")
+			fmt.Println("有", lossCnt, "次连接失败", "平均RTT:", meanRtt)
 
-			//计算平均值
-			meanRtt100 := sumRtt100.Milliseconds() / int64(len(rtts100))
-			fmt.Println(sumRtt100)
-			//计算方差
-			varianceRtt100 := 0.0
-			maxRtt100 = time.Duration(0)
-			for _, value := range rtts100 {
-				maxRtt100 = compareRtt(maxRtt100, time.Duration(value*1000000))
-				varianceRtt100 += math.Pow(float64(value-meanRtt100), 2)
-			}
-			varianceRtt100 /= float64(len(rtts100))
-			//计算标准差
-			stdDevRtt := math.Sqrt(varianceRtt100)
-			fmt.Println("最近100次中", loss100, "次连接超时", "平均RTT为", meanRtt100, "ms", "最大rtt是", maxRtt100, "标准差为", stdDevRtt)
+			//计算最近100次的统计
+			loss100 := rtts100.LossCount(timeout * time.Second)
+			stdDev := rtts100.StdDev()
+			fmt.Println("最近100次中", loss100, "次连接超时", "平均RTT为", rtts100.mean,
+				"最大rtt是", rtts100.max, "标准差为", stdDev)
 
-			if cnt%1000 == 0 {
-				//计算平均值
-				meanRtt1000 := sumRtt1000.Milliseconds() / int64(len(rtts1000))
-				//计算方差
-				varianceRtt1000 := 0.0
-				maxRtt1000 = time.Duration(0)
-				for _, value := range rtts1000 {
-					maxRtt1000 = compareRtt(maxRtt1000, time.Duration(value*1000000))
-					varianceRtt1000 += math.Pow(float64(value-meanRtt1000), 2)
-				}
-				varianceRtt1000 /= float64(len(rtts1000))
-				//计算标准差
-				stdDevRtt := math.Sqrt(varianceRtt1000)
-				fmt.Println("最近1000次中", loss1000, "次连接超时", "平均RTT为", meanRtt1000, "ms", "最大rtt是", maxRtt1000, "标准差为", stdDevRtt)
+			//计算最近1000次的统计
+			loss1000 := rtts1000.LossCount(timeout * time.Second)
+			stdDev1000 := rtts1000.StdDev()
+			fmt.Println("最近1000次中", loss1000, "次连接超时", "平均RTT为", rtts1000.mean,
+				"最大rtt是", rtts1000.max, "标准差为", stdDev1000)
 
-			}
 			fmt.Println()
 		}
 		//写入写缓冲区并写入文件
@@ -210,4 +208,36 @@ func CheckTcpPing(address, hostName string, interval float64) {
 		}
 	}()
 
+}
+
+var tcpPingCmd = &cobra.Command{
+	Use:   "tcp-ping",
+	Short: "ping tcp rtt",
+	Long:  `ping tcp rtt`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		addr, err := cmd.Flags().GetString("address")
+		if err != nil || addr == "" {
+			return fmt.Errorf("no address to connect")
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		onlySummary, _ := cmd.Flags().GetBool("only-summary")
+		timeout, _ := cmd.Flags().GetInt("timeout")
+		interval, _ := cmd.Flags().GetFloat64("interval")
+		count, _ := cmd.Flags().GetInt("count")
+		address, _ := cmd.Flags().GetString("address")
+		hostname, _ := os.Hostname()
+		CheckTcpPing(address, hostname, interval, time.Duration(timeout), count, onlySummary)
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(tcpPingCmd)
+	// 添加局部命令行参数
+	tcpPingCmd.Flags().BoolP("only-summary", "", false, "display only summary")
+	tcpPingCmd.Flags().IntP("timeout", "t", 2, "connect timeout")
+	tcpPingCmd.Flags().Float64P("interval", "i", 1, "connect interval")
+	tcpPingCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
+	tcpPingCmd.Flags().StringP("address", "a", "10.11.0.1:80", "want to connect to IP:PORT")
 }
