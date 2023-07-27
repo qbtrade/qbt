@@ -160,12 +160,6 @@ func writeCSVRow(csvWriteChan chan tcpInformation, writer *csv.Writer, displaySu
 				fmt.Println("writer.Write error", err)
 				return
 			}
-			//判断写缓冲区是否有错误
-			err = writer.Error()
-			if err != nil {
-				fmt.Println("writer error", err)
-				return
-			}
 
 			//每进行100次tcp-ping进行一次统计
 			if tpv.cnt%100 == 0 {
@@ -175,6 +169,11 @@ func writeCSVRow(csvWriteChan chan tcpInformation, writer *csv.Writer, displaySu
 		//刷盘
 		case <-time.After(time.Second * 10):
 			writer.Flush()
+			err := writer.Error()
+			if err != nil {
+				fmt.Println("writer error", err)
+				return
+			}
 
 		}
 
@@ -212,18 +211,18 @@ func establishTcp(ip, port, hostName string, timeout time.Duration,
 		rtt = time.Since(start)
 	}
 	defer func() {
+		//还给管道一个许可
+		_, ok := <-tcpChan
+		if !ok {
+			fmt.Println("tcpChan channel closed")
+			return
+		}
+		//关闭连接
 		err = conn.Close()
 		if err != nil {
 			return
 		}
-		//还给管道一个许可
-		select {
-		case _, ok := <-tcpChan:
-			if !ok {
-				panic("tcpChan channel closed")
-			}
 
-		}
 	}()
 	tcpInfo := tcpInformation{
 		ip:       ip,
@@ -233,13 +232,7 @@ func establishTcp(ip, port, hostName string, timeout time.Duration,
 		rtt:      rtt,
 		start:    start,
 	}
-	select {
-	case csvWrite <- tcpInfo:
-	default:
-		//管道关闭导致写入失败
-		panic("csvWrite channel closed")
-
-	}
+	csvWrite <- tcpInfo
 
 }
 
@@ -304,7 +297,6 @@ func CheckTcpPing(address, hostName string, interval float64, timeout time.Durat
 			fmt.Println("close file error", err)
 			return
 		}
-		close(tcpChan)
 	}()
 	//写线程
 	go writeCSVRow(csvWriteChan, writer, displaySummaryOnly, timeout)
