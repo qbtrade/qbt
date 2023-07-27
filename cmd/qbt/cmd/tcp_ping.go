@@ -187,11 +187,7 @@ func establishTcp(ip, port, hostName string, timeout time.Duration,
 	case tcpChan <- 9:
 		defer func() {
 			//还给管道一个许可
-			_, ok := <-tcpChan
-			if !ok {
-				fmt.Println("tcpChan channel closed")
-				return
-			}
+			<-tcpChan
 		}()
 	default:
 		//用于处理往管道中写入数据，因为管道被关闭导致失败
