@@ -20,6 +20,36 @@ type tcpPingQueue struct {
 	max   time.Duration
 }
 
+type tcpPingVar struct {
+	//cnt记录进行了多少次tcp-ping,lossCnt记录有多少次丢包
+	cnt     int
+	lossCnt int
+	sumRtt  time.Duration
+	//使用队列来记录最近100和1000次的rtt
+	rtts100  *tcpPingQueue
+	rtts1000 *tcpPingQueue
+}
+
+type tcpInformation struct {
+	start    time.Time
+	hostName string
+	ip       string
+	port     string
+	rtt      time.Duration
+	loss     bool
+}
+
+func newTcpPingVar() *tcpPingVar {
+	return &tcpPingVar{
+		sumRtt:   time.Duration(0),
+		rtts100:  newTcpPingQueue(100),
+		rtts1000: newTcpPingQueue(1000),
+	}
+}
+
+//tpv结构体中包含实现tcp-ping并发需要的全局变量
+var tpv = newTcpPingVar()
+
 func newTcpPingQueue(limit int) *tcpPingQueue {
 	return &tcpPingQueue{
 		limit: limit,
@@ -71,40 +101,154 @@ func (q *tcpPingQueue) LossCount(timeout time.Duration) (lossCount int) {
 	return lossCount
 }
 
-func compareRtt(a, b time.Duration) time.Duration {
-	if a > b {
-		return a
-	} else {
-		return b
+func tcpSummary(timeout time.Duration) {
+	//计算总的平均值
+	meanRtt := tpv.sumRtt.Milliseconds() / int64(tpv.cnt)
+	fmt.Println("\n当前总共进行了", tpv.cnt, "次tcp-ping其中：")
+	fmt.Println("有", tpv.lossCnt, "次连接失败", "平均RTT:", meanRtt, "ms")
+
+	//计算最近100次的统计
+	loss100 := tpv.rtts100.LossCount(timeout * time.Second)
+	stdDev := tpv.rtts100.StdDev()
+	fmt.Println("最近100次中", loss100, "次连接超时", "平均RTT为", tpv.rtts100.mean,
+		"最大rtt是", tpv.rtts100.max, "标准差为", stdDev)
+
+	//计算最近1000次的统计
+	loss1000 := tpv.rtts1000.LossCount(timeout * time.Second)
+	stdDev1000 := tpv.rtts1000.StdDev()
+	fmt.Println("最近1000次中", loss1000, "次连接超时", "平均RTT为", tpv.rtts1000.mean,
+		"最大rtt是", tpv.rtts1000.max, "标准差为", stdDev1000)
+
+	fmt.Println()
+}
+
+func writeCSVRow(csvWriteChan chan tcpInformation, writer *csv.Writer, displaySummaryOnly bool,
+	timeout time.Duration) {
+	for {
+		select {
+		case t, ok := <-csvWriteChan:
+			//管道已关闭但还是进行读取
+			if !ok {
+				panic("csvWriteChan channel closed")
+			}
+			//每次拨号cnt都要++
+			tpv.cnt++
+			if t.loss {
+				tpv.lossCnt++
+			}
+			tpv.sumRtt += t.rtt
+			rttMs := float64(t.rtt.Nanoseconds()) / 1e6
+			//将当前rtt加入队列
+			tpv.rtts100.pushAndMaintain(t.rtt)
+			tpv.rtts1000.pushAndMaintain(t.rtt)
+
+			if !displaySummaryOnly {
+				fmt.Printf("\rtcp-ping (%s:%s) seq=%d rtt=%.2fms       ", t.ip, t.port, tpv.cnt, rttMs)
+			}
+
+			dataRow := []string{
+				strconv.FormatInt(t.start.UnixMilli(), 10),
+				t.hostName,
+				t.ip,
+				t.port,
+				strconv.FormatFloat(rttMs, 'f', 4, 64),
+				strconv.FormatBool(t.loss),
+			}
+
+			err := writer.Write(dataRow)
+			if err != nil {
+				fmt.Println("writer.Write error", err)
+				return
+			}
+
+			//每进行100次tcp-ping进行一次统计
+			if tpv.cnt%100 == 0 {
+				tcpSummary(timeout)
+			}
+
+		//刷盘
+		case <-time.After(time.Second * 10):
+			writer.Flush()
+			err := writer.Error()
+			if err != nil {
+				fmt.Println("writer error", err)
+				return
+			}
+
+		}
+
 	}
 }
 
-func CheckTcpPing(address, hostName string, interval float64, timeout time.Duration, count int, displaySummaryOnly bool) {
-	//求ip和端口号
-	part := strings.Split(address, ":")
-	ip := part[0]
-	port := part[1]
+func establishTcp(ip, port, hostName string, timeout time.Duration,
+	tcpChan chan int, csvWrite chan tcpInformation) {
+	//从管道中获得一个许可，防止并发的tcp连接过多
+	select {
+	case tcpChan <- 9:
+		defer func() {
+			//还给管道一个许可
+			<-tcpChan
+		}()
+	default:
+		//用于处理往管道中写入数据，因为管道被关闭导致失败
+		return
+	}
+	//拨号，建立TCP连接
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", ip+":"+port, timeout*time.Second)
+	if conn == nil {
+		return
+	}
+	defer func() {
+		//关闭连接
+		err = conn.Close()
+		if err != nil {
+			return
+		}
 
-	filename := "tcp_ping.csv"
-	var (
-		dataRow []string
-		file    *os.File
-		err     error
-		writer  *csv.Writer
-	)
-	//判断csv文件是否存在
+	}()
+	rtt := time.Duration(0)
+	loss := false
+	if err != nil {
+		//判断是否是超时错误
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			loss = true
+			rtt = timeout * time.Second
+		} else {
+			fmt.Println("连接失败", err)
+			return
+		}
+	} else {
+		//确定rtt并写入csv文件
+		rtt = time.Since(start)
+	}
+	tcpInfo := tcpInformation{
+		ip:       ip,
+		port:     port,
+		hostName: hostName,
+		loss:     loss,
+		rtt:      rtt,
+		start:    start,
+	}
+	csvWrite <- tcpInfo
+
+}
+
+func openCsvFile(filename string) (writer *csv.Writer, file *os.File, err error) {
 	_, err = os.Stat(filename)
 	if os.IsNotExist(err) {
 		//文件不存在则创建csv文件,并添加标题
 		file, err = os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			fmt.Println("create csv file error:", err)
+			return
 		}
 		writer = csv.NewWriter(file)
-		dataRow = []string{"ts", "hostname", "ip", "port", "rtt", "loss"}
-		err := writer.Write(dataRow)
+		dataRow := []string{"ts", "hostname", "ip", "port", "rtt", "loss"}
+		err = writer.Write(dataRow)
 		if err != nil {
 			fmt.Println("writer.Write error", err)
+			return
 		}
 		writer.Flush()
 	} else {
@@ -112,101 +256,57 @@ func CheckTcpPing(address, hostName string, interval float64, timeout time.Durat
 		file, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			fmt.Println("open csv file error:", err)
+			return
 		}
 		writer = csv.NewWriter(file)
 	}
+	return writer, file, err
+}
 
-	//cnt记录进行了多少次tcp-ping,lossCnt记录有多少次丢包
-	cnt, lossCnt := 0, 0
-	sumRtt := time.Duration(0)
-	//使用队列来记录最近100和1000次的rtt
-	var rtts100 = newTcpPingQueue(100)
-	var rtts1000 = newTcpPingQueue(1000)
-	//循环tcp-ping
-	for {
-		//每次尝试进行连接cnt都要+1
-		cnt++
-		if count > 0 && cnt > count {
-			break
-		}
-		//拨号，建立TCP连接
-		start := time.Now()
-		now := start.UnixMilli()
-		conn, err := net.DialTimeout("tcp", address, timeout*time.Second)
-		rtt := time.Duration(0)
-		if err != nil {
-			//判断是否是超时错误
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				lossCnt++
-				dataRow = []string{strconv.FormatInt(now, 10), hostName, ip, port, "9999", "true"}
-				rtt = timeout * time.Second
-			} else {
-				fmt.Println("连接失败")
-				break
-			}
-		} else {
-			//确定rtt并写入csv文件
-			rtt = time.Since(start)
-		}
-		//将当前rtt加入队列
-		sumRtt += rtt
-		rtts100.pushAndMaintain(rtt)
-		rtts1000.pushAndMaintain(rtt)
+func CheckTcpPing(address, hostName string, interval float64, timeout time.Duration, count int,
+	displaySummaryOnly bool, maxTcpConnect int) {
+	//求ip和端口号
+	part := strings.Split(address, ":")
+	ip := part[0]
+	port := part[1]
+	//文件名
+	filename := "tcp_ping.csv"
+	//文件相关变量
+	var (
+		file   *os.File
+		err    error
+		writer *csv.Writer
+	)
+	//用于限制同时执行的线程数量的管道
+	tcpChan := make(chan int, maxTcpConnect)
+	//用于传递给写线程数据的管道
+	csvWriteChan := make(chan tcpInformation, 1000)
 
-		rttMs := float64(rtt.Nanoseconds()) / 1e6
-		if !displaySummaryOnly {
-			fmt.Printf("\rtcp-ping (%s:%s) seq=%d rtt=%.2fms       ", ip, port, cnt, rttMs)
-		}
-		dataRow = []string{strconv.FormatInt(now, 10), hostName, ip, port, fmt.Sprintf("%.2f", rttMs), "false"}
-
-		//每进行100次tcp-ping进行一次统计
-		if cnt%100 == 0 {
-			//计算总的平均值
-			meanRtt := sumRtt.Nanoseconds() / int64(cnt)
-			fmt.Println("\n当前总共进行了", cnt, "次tcp-ping其中：")
-			fmt.Println("有", lossCnt, "次连接失败", "平均RTT:", meanRtt)
-
-			//计算最近100次的统计
-			loss100 := rtts100.LossCount(timeout * time.Second)
-			stdDev := rtts100.StdDev()
-			fmt.Println("最近100次中", loss100, "次连接超时", "平均RTT为", rtts100.mean,
-				"最大rtt是", rtts100.max, "标准差为", stdDev)
-
-			//计算最近1000次的统计
-			loss1000 := rtts1000.LossCount(timeout * time.Second)
-			stdDev1000 := rtts1000.StdDev()
-			fmt.Println("最近1000次中", loss1000, "次连接超时", "平均RTT为", rtts1000.mean,
-				"最大rtt是", rtts1000.max, "标准差为", stdDev1000)
-
-			fmt.Println()
-		}
-		//写入写缓冲区并写入文件
-		err = writer.Write(dataRow)
-		if err != nil {
-			fmt.Println("writer.Write error", err)
-		}
-		writer.Flush()
-
-		//判断写缓冲区是否有错误
-		err = writer.Error()
-		if err != nil {
-			fmt.Println("writer error", err)
-		}
-
-		err = conn.Close()
-		if err != nil {
-			fmt.Println("close tcp_ping conn error,", err)
-		}
-		//等待interval秒再进行查询
-		time.Sleep(time.Duration(interval*1000) * time.Millisecond)
+	//打开文件
+	writer, file, err = openCsvFile(filename)
+	if err != nil {
+		fmt.Println("open csvFile fail")
+		return
 	}
-	//关闭文件和连接
+	//关闭文件和连接以及管道
 	defer func() {
 		err = file.Close()
 		if err != nil {
 			fmt.Println("close file error", err)
+			return
 		}
 	}()
+	//写线程
+	go writeCSVRow(csvWriteChan, writer, displaySummaryOnly, timeout)
+
+	for count > 0 || tpv.cnt <= count {
+
+		//建立tcp连接
+		go establishTcp(ip, port, hostName, timeout, tcpChan, csvWriteChan)
+
+		//等待interval秒再进行查询
+		time.Sleep(time.Duration(interval*1000) * time.Millisecond)
+	}
 
 }
 
@@ -227,8 +327,9 @@ var tcpPingCmd = &cobra.Command{
 		interval, _ := cmd.Flags().GetFloat64("interval")
 		count, _ := cmd.Flags().GetInt("count")
 		address, _ := cmd.Flags().GetString("address")
+		maxTcpConnect, _ := cmd.Flags().GetInt("maxTcpConnect")
 		hostname, _ := os.Hostname()
-		CheckTcpPing(address, hostname, interval, time.Duration(timeout), count, onlySummary)
+		CheckTcpPing(address, hostname, interval, time.Duration(timeout), count, onlySummary, maxTcpConnect)
 	},
 }
 
@@ -240,4 +341,5 @@ func init() {
 	tcpPingCmd.Flags().Float64P("interval", "i", 1, "connect interval")
 	tcpPingCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
 	tcpPingCmd.Flags().StringP("address", "a", "10.11.0.1:80", "want to connect to IP:PORT")
+	tcpPingCmd.Flags().IntP("maxTcpConnect", "", 1000, "the maximum number of TCP connections")
 }
