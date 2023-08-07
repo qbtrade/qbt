@@ -259,6 +259,14 @@ func openCsvFile(filename string) (writer *csv.Writer, file *os.File, err error)
 			return
 		}
 		writer = csv.NewWriter(file)
+		dataRow := []string{""}
+		err = writer.Write(dataRow)
+		if err != nil {
+			fmt.Println("writer.Write error", err)
+			return
+		}
+		writer.Flush()
+
 	}
 	return writer, file, err
 }
@@ -269,8 +277,9 @@ func CheckTcpPing(address, hostName string, interval float64, timeout time.Durat
 	part := strings.Split(address, ":")
 	ip := part[0]
 	port := part[1]
+	currentTime := time.Now()
 	//文件名
-	filename := "tcp_ping.csv"
+	filename := hostName + "_" + "tcp_ping" + "_" + currentTime.Format("2006010215") + ".csv"
 	//文件相关变量
 	var (
 		file   *os.File
@@ -307,7 +316,6 @@ func CheckTcpPing(address, hostName string, interval float64, timeout time.Durat
 		//等待interval秒再进行查询
 		time.Sleep(time.Duration(interval*1000) * time.Millisecond)
 	}
-
 }
 
 var tcpPingCmd = &cobra.Command{
