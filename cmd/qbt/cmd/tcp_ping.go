@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"github.com/spf13/cobra"
 	"math"
@@ -110,13 +111,13 @@ func tcpSummary(timeout time.Duration) {
 	//计算最近100次的统计
 	loss100 := tpv.rtts100.LossCount(timeout * time.Second)
 	stdDev := tpv.rtts100.StdDev()
-	fmt.Println("最近100次中", loss100, "次连接超时", "平均RTT为", tpv.rtts100.mean,
+	fmt.Println("最近100次中", loss100, "次连接失败", "平均RTT为", tpv.rtts100.mean,
 		"最大rtt是", tpv.rtts100.max, "标准差为", stdDev)
 
 	//计算最近1000次的统计
 	loss1000 := tpv.rtts1000.LossCount(timeout * time.Second)
 	stdDev1000 := tpv.rtts1000.StdDev()
-	fmt.Println("最近1000次中", loss1000, "次连接超时", "平均RTT为", tpv.rtts1000.mean,
+	fmt.Println("最近1000次中", loss1000, "次连接失败", "平均RTT为", tpv.rtts1000.mean,
 		"最大rtt是", tpv.rtts1000.max, "标准差为", stdDev1000)
 
 	fmt.Println()
@@ -183,45 +184,39 @@ func writeCSVRow(csvWriteChan chan tcpInformation, writer *csv.Writer, displaySu
 func establishTcp(ip, port, hostName string, timeout time.Duration,
 	tcpChan chan int, csvWrite chan tcpInformation) {
 	//从管道中获得一个许可，防止并发的tcp连接过多
-	select {
-	case tcpChan <- 9:
-		defer func() {
-			//还给管道一个许可
-			<-tcpChan
-		}()
-	default:
-		//用于处理往管道中写入数据，因为管道被关闭导致失败
-		return
-	}
+	tcpChan <- 9
+	defer func() {
+		//还给管道一个许可
+		<-tcpChan
+	}()
+
 	//拨号，建立TCP连接
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", ip+":"+port, timeout*time.Second)
-	if conn == nil {
-		return
-	}
-	defer func() {
-		//关闭连接
-		err = conn.Close()
-		if err != nil {
-			return
-		}
-
-	}()
 	rtt := time.Duration(0)
 	loss := false
 	if err != nil {
+		loss = true
 		//判断是否是超时错误
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			loss = true
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			rtt = timeout * time.Second
 		} else {
-			fmt.Println("连接失败", err)
-			return
+			fmt.Println("连接失败")
+			rtt = timeout * time.Second * 2
 		}
+
 	} else {
 		//确定rtt并写入csv文件
 		rtt = time.Since(start)
+		defer func() {
+			err = conn.Close()
+			if err != nil {
+				fmt.Println("关闭管道失败:", err)
+			}
+		}()
 	}
+
 	tcpInfo := tcpInformation{
 		ip:       ip,
 		port:     port,
