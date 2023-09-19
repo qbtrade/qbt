@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"github.com/qbtrade/qbt/cmd/qbt/cf"
 	"github.com/spf13/cobra"
 	"math"
 	"net"
@@ -125,6 +126,7 @@ func tcpSummary(timeout time.Duration) {
 
 func writeCSVRow(csvWriteChan chan tcpInformation, writer *csv.Writer, displaySummaryOnly bool,
 	timeout time.Duration) {
+	influxdbPoints := make([]cf.InfluxdbPoint, 0, 1000)
 	for {
 		select {
 		case t, ok := <-csvWriteChan:
@@ -159,16 +161,41 @@ func writeCSVRow(csvWriteChan chan tcpInformation, writer *csv.Writer, displaySu
 			err := writer.Write(dataRow)
 			if err != nil {
 				fmt.Println("writer.Write error", err)
-				return
 			}
 
 			//每进行100次tcp-ping进行一次统计
 			if tpv.cnt%100 == 0 {
 				tcpSummary(timeout)
 			}
+			influxdbPoints = append(influxdbPoints, cf.InfluxdbPoint{
+				Measurement: "tcp_ping",
+				Tags: map[string]string{
+					"host": t.hostName,
+					"ip":   t.ip,
+					"port": t.port,
+				},
+				Fields: map[string]float64{
+					"rtt": rttMs,
+				},
+				Time: t.start,
+			})
+			if len(influxdbPoints) >= 100 {
+				errInfluxdb := cf.WritePoints(influxdbPoints)
+				if errInfluxdb != nil {
+					fmt.Println("write to influxdb error", errInfluxdb)
+				} else {
+					influxdbPoints = make([]cf.InfluxdbPoint, 0, 1000)
+				}
+			}
 
 		//刷盘
 		case <-time.After(time.Second * 10):
+			errInfluxdb := cf.WritePoints(influxdbPoints)
+			if errInfluxdb != nil {
+				fmt.Println("write to influxdb error", errInfluxdb)
+			} else {
+				influxdbPoints = make([]cf.InfluxdbPoint, 0, 1000)
+			}
 			writer.Flush()
 			err := writer.Error()
 			if err != nil {
