@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -294,7 +295,10 @@ func openCsvFile(filename string) (writer *csv.Writer, file *os.File, err error)
 }
 
 func CheckTcpPing(address, hostName string, interval float64, timeout time.Duration, count int,
-	displaySummaryOnly bool, maxTcpConnect int) {
+	displaySummaryOnly bool, maxTcpConnect int, wg *sync.WaitGroup) {
+	// 防止程序提前退出
+	defer wg.Done()
+
 	//求ip和端口号
 	part := strings.Split(address, ":")
 	ip := part[0]
@@ -345,8 +349,8 @@ var tcpPingCmd = &cobra.Command{
 	Short: "ping tcp rtt",
 	Long:  `ping tcp rtt`,
 	Args: func(cmd *cobra.Command, args []string) error {
-		addr, err := cmd.Flags().GetString("address")
-		if err != nil || addr == "" {
+		addresses, err := cmd.Flags().GetStringSlice("address")
+		if err != nil || len(addresses) == 0 {
 			return fmt.Errorf("no address to connect")
 		}
 		return nil
@@ -356,10 +360,15 @@ var tcpPingCmd = &cobra.Command{
 		timeout, _ := cmd.Flags().GetInt("timeout")
 		interval, _ := cmd.Flags().GetFloat64("interval")
 		count, _ := cmd.Flags().GetInt("count")
-		address, _ := cmd.Flags().GetString("address")
+		addresses, _ := cmd.Flags().GetStringSlice("address")
 		maxTcpConnect, _ := cmd.Flags().GetInt("maxTcpConnect")
 		hostname, _ := os.Hostname()
-		CheckTcpPing(address, hostname, interval, time.Duration(timeout), count, onlySummary, maxTcpConnect)
+		var wg sync.WaitGroup
+		for _, address := range addresses {
+			wg.Add(1)
+			go CheckTcpPing(address, hostname, interval, time.Duration(timeout), count, onlySummary, maxTcpConnect, &wg)
+		}
+		wg.Wait()
 	},
 }
 
@@ -370,6 +379,6 @@ func init() {
 	tcpPingCmd.Flags().IntP("timeout", "t", 2, "connect timeout")
 	tcpPingCmd.Flags().Float64P("interval", "i", 1, "connect interval")
 	tcpPingCmd.Flags().IntP("count", "c", math.MaxInt, "max count try to connect")
-	tcpPingCmd.Flags().StringP("address", "a", "10.11.0.1:80", "want to connect to IP:PORT")
+	tcpPingCmd.Flags().StringSliceP("address", "a", []string{"10.11.0.1:80"}, "want to connect to IP:PORT,IP:PORT")
 	tcpPingCmd.Flags().IntP("maxTcpConnect", "", 1000, "the maximum number of TCP connections")
 }
